@@ -61,13 +61,15 @@ namespace MatlabFileIO
 
             //Array flags
             //Will always be too large to be in small data format, so not checking t.data
-            t = MatfileHelper.ReadTag(matrixStream);
-            UInt32 flagsClass = matrixStream.ReadUInt32();
-            byte flags = (byte)(flagsClass >> 8) ;
-            if ((flags & 0x80) == 0x80)
-                throw new IOException("Complex numbers not supported");
-            vi.dataType = MatfileHelper.parseArrayType((byte)flagsClass);
-            matrixStream.ReadUInt32();//unused flags
+            //t = MatfileHelper.ReadTag(matrixStream);
+            //UInt32 flagsClass = matrixStream.ReadUInt32();
+            //byte flags = (byte)(flagsClass >> 8) ;
+            //if ((flags & 0x80) == 0x08)
+            //    throw new IOException("Complex numbers not supported");
+            //vi.dataType = MatfileHelper.parseArrayType((byte)flagsClass);
+            //matrixStream.ReadUInt32();//unused flags
+            Flag Flag = matrixStream.ReadFlag();
+            vi.dataType = Flag.dataClass;
 
             //Dimensions - There are always 2 dimensions, so this
             //tag will never be of small data format, i.e. not checking for t.data
@@ -76,7 +78,7 @@ namespace MatlabFileIO
             int elements = 1;
             for (int i = 0; i < arrayDimensions.Length; i++)
             {
-                int dimension = (int)matrixStream.ReadUInt32();
+                int dimension = (int)matrixStream.ReadUInt32();// depends on sizeof(t.dataType) => MatfileHelper.MatlabBytesPerType(t.dataType)
                 arrayDimensions[arrayDimensions.Length - i - 1] = dimension;
                 elements *= dimension;
             }
@@ -102,35 +104,48 @@ namespace MatlabFileIO
             
             //Read and reshape data
             t = MatfileHelper.ReadTag(matrixStream);
-            if (t.length / MatfileHelper.MatlabBytesPerType(t.dataType) != elements)
-                throw new IOException("Read dimensions didn't correspond to header dimensions");
-                    
-            Array readBytes;
-            if (t.data == null)
-                readBytes = MatfileHelper.CastToMatlabType(vi.dataType, matrixStream.ReadBytes((int)t.length));
-            else
-                readBytes = (Array)t.data;
+		   reshape(ref vi.data, ref vi.dataType, matrixStream, t, arrayDimensions, elements);
 
-            Array reshapedData = Array.CreateInstance(vi.dataType, arrayDimensions);
-            if (t.dataType != vi.dataType) //This happens when matlab choses to store the data in a smaller datatype when the values permit it
+            // Read Imaginary data
+            if (Flag.Complex)
             {
-                Array linearData = Array.CreateInstance(vi.dataType, readBytes.Length);
-                Array.Copy(readBytes, linearData, readBytes.Length);
-                Buffer.BlockCopy(linearData, 0, reshapedData, 0, linearData.Length * MatfileHelper.MatlabBytesPerType(vi.dataType));
-                vi.dataType = t.dataType;
+                t = matrixStream.ReadTag();
+                reshape(ref vi.Image, ref vi.dataType, matrixStream, t, arrayDimensions, elements);
             }
-            else //Readbytes is already in the correct type
-                Buffer.BlockCopy(readBytes, 0, reshapedData, 0, readBytes.Length * MatfileHelper.MatlabBytesPerType(vi.dataType));
-
-            if(reshapedData.Length == 1)
-                vi.data = reshapedData.GetValue(0);
-            else
-                vi.data = reshapedData;
-
             //Move on in case the data didn't end on a 64 byte boundary
             matrixStream.BaseStream.Seek(offset + length, SeekOrigin.Begin);
         }
 
+		private static void reshape(ref object data, ref Type dataType, BinaryReader matrixStream, Tag t, int[] arrayDimensions, int elements)
+        {
+            if (t.length / MatfileHelper.MatlabBytesPerType(t.dataType) != elements)
+                throw new IOException("Read dimensions didn't correspond to header dimensions");
+
+            Array readBytes;
+            if (t.data == null)
+                readBytes = MatfileHelper.CastToMatlabType(t.dataType, matrixStream.ReadBytes((int)t.length));
+            else
+                readBytes = (Array)t.data;
+
+            Array reshapedData = Array.CreateInstance(dataType, elements);//elements variable replaced with arrayDimensions to sure Linear data 
+            if (t.dataType != dataType) //This happens when matlab choses to store the data in a smaller datatype when the values permit it
+            {
+                Array linearData = Array.CreateInstance(dataType, readBytes.Length);
+                Array.Copy(readBytes, linearData, readBytes.Length);
+                Buffer.BlockCopy(linearData, 0, reshapedData, 0, linearData.Length * MatfileHelper.MatlabBytesPerType(dataType));
+               // dataType = t.dataType;
+            }
+            else //Readbytes is already in the correct type
+                Buffer.BlockCopy(readBytes, 0, reshapedData, 0, readBytes.Length * MatfileHelper.MatlabBytesPerType(dataType));
+
+            if (reshapedData.Length == 1)
+                data = reshapedData.GetValue(0);
+            else
+                data = reshapedData;
+
+																	   
+																			
+        }
         public void Close()
         {
             readStream.Close();
